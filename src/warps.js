@@ -62,6 +62,7 @@ const speedSlider = document.querySelector('#speed')
 let imageTexture = null
 let textureSize = { width: 1, height: 1 }
 let hasTexture = false
+let videoSource = null // non-null when texture is a playing video
 
 const mouse = new MouseTracker(canvas)
 const recorder = setupRecording(canvas)
@@ -85,11 +86,10 @@ function switchEffect(name) {
     })
 }
 
-// Create texture from image
-function createTextureFromImage(image) {
-    if (imageTexture) {
-        gl.deleteTexture(imageTexture)
-    }
+// Create/replace the GL texture object
+function initTexture() {
+    if (imageTexture) gl.deleteTexture(imageTexture)
+    videoSource = null
 
     imageTexture = gl.createTexture()
     gl.bindTexture(gl.TEXTURE_2D, imageTexture)
@@ -97,17 +97,49 @@ function createTextureFromImage(image) {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image)
+}
 
+// Upload a static image as the texture
+function loadTextureFromImage(image) {
+    initTexture()
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image)
     textureSize = { width: image.width, height: image.height }
     hasTexture = true
     loadingEl.classList.add('hidden')
 }
 
-// Load image from file
-function loadImageFile(file) {
+// Set a video element as the live texture source
+function loadTextureFromVideo(video) {
+    initTexture()
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video)
+    textureSize = { width: video.videoWidth, height: video.videoHeight }
+    hasTexture = true
+    videoSource = video
+    loadingEl.classList.add('hidden')
+}
+
+// Load file (image or video)
+function loadMediaFile(file) {
+    if (file.type.startsWith('video/')) {
+        loadingEl.classList.remove('hidden')
+        const video = document.createElement('video')
+        video.muted = true
+        video.loop = true
+        video.playsInline = true
+        video.src = URL.createObjectURL(file)
+        video.addEventListener('loadeddata', () => {
+            video.play()
+            loadTextureFromVideo(video)
+        })
+        video.addEventListener('error', () => {
+            alert('Failed to load video')
+            loadingEl.classList.add('hidden')
+        })
+        return
+    }
+
     if (!file.type.startsWith('image/')) {
-        alert('Please select an image file')
+        alert('Please select an image or video file')
         return
     }
 
@@ -116,7 +148,7 @@ function loadImageFile(file) {
 
     reader.onload = (e) => {
         const img = new Image()
-        img.onload = () => createTextureFromImage(img)
+        img.onload = () => loadTextureFromImage(img)
         img.onerror = () => {
             alert('Failed to load image')
             loadingEl.classList.add('hidden')
@@ -127,15 +159,35 @@ function loadImageFile(file) {
     reader.readAsDataURL(file)
 }
 
-// Load image from URL
-function loadImageUrl(url) {
+// Load media from URL
+function loadMediaUrl(url) {
     if (!url) return
+
+    const videoExts = /\.(mp4|webm|ogv|mov)(\?|$)/i
+    if (videoExts.test(url)) {
+        loadingEl.classList.remove('hidden')
+        const video = document.createElement('video')
+        video.muted = true
+        video.loop = true
+        video.playsInline = true
+        video.crossOrigin = 'anonymous'
+        video.src = url
+        video.addEventListener('loadeddata', () => {
+            video.play()
+            loadTextureFromVideo(video)
+        })
+        video.addEventListener('error', () => {
+            alert('Failed to load video from URL')
+            loadingEl.classList.add('hidden')
+        })
+        return
+    }
 
     loadingEl.classList.remove('hidden')
     const img = new Image()
     img.crossOrigin = 'anonymous'
 
-    img.onload = () => createTextureFromImage(img)
+    img.onload = () => loadTextureFromImage(img)
     img.onerror = () => {
         alert('Failed to load image from URL')
         loadingEl.classList.add('hidden')
@@ -165,18 +217,18 @@ dropZone.addEventListener('drop', (e) => {
     e.preventDefault()
     dropZone.classList.remove('dragover')
     const file = e.dataTransfer.files[0]
-    if (file) loadImageFile(file)
+    if (file) loadMediaFile(file)
 })
 
 fileInput.addEventListener('change', (e) => {
     const file = e.target.files[0]
-    if (file) loadImageFile(file)
+    if (file) loadMediaFile(file)
 })
 
-loadUrlBtn.addEventListener('click', () => loadImageUrl(urlInput.value))
+loadUrlBtn.addEventListener('click', () => loadMediaUrl(urlInput.value))
 
 urlInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') loadImageUrl(urlInput.value)
+    if (e.key === 'Enter') loadMediaUrl(urlInput.value)
 })
 
 // Keyboard shortcuts
@@ -218,6 +270,9 @@ function render(time) {
     if (hasTexture && imageTexture) {
         gl.activeTexture(gl.TEXTURE0)
         gl.bindTexture(gl.TEXTURE_2D, imageTexture)
+        if (videoSource && !videoSource.paused) {
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, videoSource)
+        }
         gl.uniform1i(u.texture, 0)
         gl.uniform2f(u.textureSize, textureSize.width, textureSize.height)
     }
