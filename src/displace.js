@@ -1,6 +1,7 @@
 import './displace.css'
 import { createProgram, createFullscreenQuad, perspective, lookAt, mat4Multiply } from './webgl.js'
 import { setupRecording } from './controls.js'
+import { createMediaLoader } from './media-loader.js'
 import terrainVert from './shaders/displace/terrain-vert.glsl'
 import terrainFrag from './shaders/displace/terrain-frag.glsl'
 import fullscreenVert from './shaders/vertex.glsl'
@@ -160,11 +161,6 @@ mesh = createSubdividedPlane(gl, terrainProgram)
 
 // --- UI elements ---
 
-const dropZone = document.querySelector('#drop-zone')
-const fileInput = document.querySelector('#file-input')
-const urlInput = document.querySelector('#url-input')
-const loadUrlBtn = document.querySelector('#load-url')
-const loadingEl = document.querySelector('#loading')
 const displacementSlider = document.querySelector('#displacement')
 const noiseScaleSlider = document.querySelector('#noiseScale')
 const speedSlider = document.querySelector('#speed')
@@ -175,107 +171,11 @@ const terrainSliders = document.querySelector('#sliders')
 const twistSliders = document.querySelector('#twist-sliders')
 const timesliceSliders = document.querySelector('#timeslice-sliders')
 
-// --- Texture state ---
+// --- Media loader ---
 
-let imageTexture = null
-let hasTexture = false
-let videoSource = null
+const media = createMediaLoader(gl)
 
 const recorder = setupRecording(canvas)
-
-// Create/replace the GL texture object
-function initTexture() {
-    if (imageTexture) gl.deleteTexture(imageTexture)
-    videoSource = null
-
-    imageTexture = gl.createTexture()
-    gl.bindTexture(gl.TEXTURE_2D, imageTexture)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-}
-
-function loadTextureFromImage(image) {
-    initTexture()
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image)
-    hasTexture = true
-    loadingEl.classList.add('hidden')
-}
-
-function loadTextureFromVideo(video) {
-    initTexture()
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video)
-    hasTexture = true
-    videoSource = video
-    loadingEl.classList.add('hidden')
-}
-
-function loadMediaFile(file) {
-    if (file.type.startsWith('video/')) {
-        loadingEl.classList.remove('hidden')
-        const video = document.createElement('video')
-        video.muted = true
-        video.loop = true
-        video.playsInline = true
-        video.src = URL.createObjectURL(file)
-        video.addEventListener('loadeddata', () => {
-            video.play()
-            loadTextureFromVideo(video)
-        })
-        video.addEventListener('error', () => {
-            alert('Failed to load video')
-            loadingEl.classList.add('hidden')
-        })
-        return
-    }
-
-    if (!file.type.startsWith('image/')) {
-        alert('Please select an image or video file')
-        return
-    }
-
-    loadingEl.classList.remove('hidden')
-    const reader = new FileReader()
-    reader.onload = (e) => {
-        const img = new Image()
-        img.onload = () => loadTextureFromImage(img)
-        img.onerror = () => { alert('Failed to load image'); loadingEl.classList.add('hidden') }
-        img.src = e.target.result
-    }
-    reader.readAsDataURL(file)
-}
-
-function loadMediaUrl(url) {
-    if (!url) return
-
-    const videoExts = /\.(mp4|webm|ogv|mov)(\?|$)/i
-    if (videoExts.test(url)) {
-        loadingEl.classList.remove('hidden')
-        const video = document.createElement('video')
-        video.muted = true
-        video.loop = true
-        video.playsInline = true
-        video.crossOrigin = 'anonymous'
-        video.src = url
-        video.addEventListener('loadeddata', () => {
-            video.play()
-            loadTextureFromVideo(video)
-        })
-        video.addEventListener('error', () => {
-            alert('Failed to load video from URL')
-            loadingEl.classList.add('hidden')
-        })
-        return
-    }
-
-    loadingEl.classList.remove('hidden')
-    const img = new Image()
-    img.crossOrigin = 'anonymous'
-    img.onload = () => loadTextureFromImage(img)
-    img.onerror = () => { alert('Failed to load image from URL'); loadingEl.classList.add('hidden') }
-    img.src = url
-}
 
 // --- Effect switching ---
 
@@ -311,18 +211,6 @@ function switchEffect(name) {
 document.querySelectorAll('#controls button').forEach(btn => {
     btn.addEventListener('click', () => switchEffect(btn.dataset.effect))
 })
-
-dropZone.addEventListener('click', () => fileInput.click())
-dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover') })
-dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'))
-dropZone.addEventListener('drop', (e) => {
-    e.preventDefault(); dropZone.classList.remove('dragover')
-    const file = e.dataTransfer.files[0]
-    if (file) loadMediaFile(file)
-})
-fileInput.addEventListener('change', (e) => { const file = e.target.files[0]; if (file) loadMediaFile(file) })
-loadUrlBtn.addEventListener('click', () => loadMediaUrl(urlInput.value))
-urlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') loadMediaUrl(urlInput.value) })
 
 document.addEventListener('keydown', (e) => {
     if (e.key === '1') switchEffect('terrain')
@@ -360,10 +248,10 @@ function render(time) {
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 
     // Update video texture each frame
-    if (hasTexture && imageTexture && videoSource && !videoSource.paused) {
+    if (media.hasMedia) {
         gl.activeTexture(gl.TEXTURE0)
-        gl.bindTexture(gl.TEXTURE_2D, imageTexture)
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, videoSource)
+        media.updateVideoFrame()
+        gl.bindTexture(gl.TEXTURE_2D, media.texture)
     }
 
     if (currentEffect === 'terrain') {
@@ -386,11 +274,11 @@ function render(time) {
         gl.uniform1f(terrainUniforms.displacement, parseFloat(displacementSlider.value))
         gl.uniform1f(terrainUniforms.noiseScale, parseFloat(noiseScaleSlider.value))
         gl.uniform1f(terrainUniforms.speed, parseFloat(speedSlider.value))
-        gl.uniform1i(terrainUniforms.hasTexture, hasTexture ? 1 : 0)
+        gl.uniform1i(terrainUniforms.hasTexture, media.hasMedia ? 1 : 0)
 
-        if (hasTexture && imageTexture) {
+        if (media.hasMedia && media.texture) {
             gl.activeTexture(gl.TEXTURE0)
-            gl.bindTexture(gl.TEXTURE_2D, imageTexture)
+            gl.bindTexture(gl.TEXTURE_2D, media.texture)
             gl.uniform1i(terrainUniforms.texture, 0)
         }
 
@@ -401,13 +289,13 @@ function render(time) {
 
         gl.uniform1f(twistUniforms.time, t)
         gl.uniform2f(twistUniforms.resolution, canvas.width, canvas.height)
-        gl.uniform1i(twistUniforms.hasTexture, hasTexture ? 1 : 0)
+        gl.uniform1i(twistUniforms.hasTexture, media.hasMedia ? 1 : 0)
         gl.uniform1f(twistUniforms.twistSpeed, parseFloat(twistSpeedSlider.value))
         gl.uniform1f(twistUniforms.twistAmount, parseFloat(twistAmountSlider.value))
 
-        if (hasTexture && imageTexture) {
+        if (media.hasMedia && media.texture) {
             gl.activeTexture(gl.TEXTURE0)
-            gl.bindTexture(gl.TEXTURE_2D, imageTexture)
+            gl.bindTexture(gl.TEXTURE_2D, media.texture)
             gl.uniform1i(twistUniforms.texture, 0)
         }
 
@@ -420,13 +308,13 @@ function render(time) {
         gl.useProgram(timesliceProgram)
         createFullscreenQuad(gl, timesliceProgram)
 
-        if (hasTexture) {
+        if (media.hasMedia) {
             // Pass 1: Capture — render video into tile FBO at tile resolution
             gl.bindFramebuffer(gl.FRAMEBUFFER, tileFBO)
             gl.viewport(0, 0, TILE_SIZE, TILE_SIZE)
 
             gl.activeTexture(gl.TEXTURE0)
-            gl.bindTexture(gl.TEXTURE_2D, imageTexture)
+            gl.bindTexture(gl.TEXTURE_2D, media.texture)
             gl.uniform1i(timesliceUniforms.texture, 0)
             gl.uniform2f(timesliceUniforms.resolution, TILE_SIZE, TILE_SIZE)
             gl.uniform1i(timesliceUniforms.mode, 0)
