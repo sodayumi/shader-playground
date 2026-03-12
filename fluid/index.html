@@ -16,6 +16,7 @@
     <div id="controls">
       <button data-effect="navier-stokes" class="active"><span class="key">1</span> Navier-Stokes</button>
       <button data-effect="poolwater"><span class="key">2</span> Pool Water</button>
+      <button data-effect="ferrofluid"><span class="key">3</span> Ferrofluid</button>
     </div>
     <div id="sliders">
       <label class="slider-navier-stokes">
@@ -37,6 +38,18 @@
       <label class="slider-poolwater">
         <span>Scale</span>
         <input type="range" id="harmonics" min="0.2" max="2" step="0.1" value="1">
+      </label>
+      <label class="slider-ferrofluid">
+        <span>Feed</span>
+        <input type="range" id="feed" min="0.01" max="0.08" step="0.001" value="0.0367">
+      </label>
+      <label class="slider-ferrofluid">
+        <span>Kill</span>
+        <input type="range" id="kill" min="0.03" max="0.07" step="0.001" value="0.0649">
+      </label>
+      <label class="slider-ferrofluid">
+        <span>Metallic</span>
+        <input type="range" id="metallic" min="0.0" max="2.0" step="0.1" value="1.0">
       </label>
     </div>
     <div id="upload-panel">

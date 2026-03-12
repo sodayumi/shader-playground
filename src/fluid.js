@@ -8,6 +8,8 @@ import simShader from './shaders/fluid/sim.glsl'
 import transportShader from './shaders/fluid/transport.glsl'
 import displayShader from './shaders/fluid/display.glsl'
 import poolwaterShader from './shaders/fluid/poolwater.glsl'
+import ferroSimShader from './shaders/fluid/ferrofluid-sim.glsl'
+import ferroDisplayShader from './shaders/fluid/ferrofluid-display.glsl'
 
 const canvas = document.querySelector('#canvas')
 const gl = canvas.getContext('webgl', {
@@ -67,6 +69,54 @@ const displayUniforms = {
     hasImage: gl.getUniformLocation(displayProgram, 'u_hasImage'),
 }
 
+// ============== FERROFLUID SETUP ==============
+
+const ferroSimProgram = createProgram(gl, simVertSource, ferroSimShader)
+const ferroDisplayProgram = createProgram(gl, simVertSource, ferroDisplayShader)
+
+const ferroSimUniforms = {
+    state: gl.getUniformLocation(ferroSimProgram, 'u_state'),
+    resolution: gl.getUniformLocation(ferroSimProgram, 'u_resolution'),
+    mouse: gl.getUniformLocation(ferroSimProgram, 'u_mouse'),
+    mouseDown: gl.getUniformLocation(ferroSimProgram, 'u_mouseDown'),
+    feed: gl.getUniformLocation(ferroSimProgram, 'u_feed'),
+    kill: gl.getUniformLocation(ferroSimProgram, 'u_kill'),
+}
+
+const ferroDisplayUniforms = {
+    state: gl.getUniformLocation(ferroDisplayProgram, 'u_state'),
+    resolution: gl.getUniformLocation(ferroDisplayProgram, 'u_resolution'),
+    time: gl.getUniformLocation(ferroDisplayProgram, 'u_time'),
+    metallic: gl.getUniformLocation(ferroDisplayProgram, 'u_metallic'),
+}
+
+const FERRO_RES = 512
+
+function initFerroData() {
+    const data = new Float32Array(FERRO_RES * FERRO_RES * 4)
+    for (let y = 0; y < FERRO_RES; y++) {
+        for (let x = 0; x < FERRO_RES; x++) {
+            const i = (y * FERRO_RES + x) * 4
+            data[i] = 1.0  // Chemical A
+            // Seed: random spots
+            const nx = (x / FERRO_RES) * 2.0 - 1.0
+            const ny = (y / FERRO_RES) * 2.0 - 1.0
+            const d2 = nx * nx + ny * ny
+            data[i + 1] = d2 < 0.04 ? Math.random() * 0.5 : 0.0  // Chemical B
+            data[i + 2] = 0.0
+            data[i + 3] = 1.0
+        }
+    }
+    return data
+}
+
+let ferroData = initFerroData()
+let ferroTex0 = createFloatTexture(ferroData, FERRO_RES)
+let ferroTex1 = createFloatTexture(ferroData, FERRO_RES)
+let ferroFB0 = createFramebuffer(ferroTex0)
+let ferroFB1 = createFramebuffer(ferroTex1)
+let ferroBuffer = 0
+
 // ============== POOL WATER SETUP ==============
 
 const poolProgram = createProgram(gl, vertexShader, poolwaterShader)
@@ -81,18 +131,18 @@ const poolUniforms = {
 
 // ============== TEXTURES & FRAMEBUFFERS ==============
 
-function createFloatTexture(data) {
+function createFloatTexture(data, res = SIM_RES) {
     const tex = gl.createTexture()
     gl.bindTexture(gl.TEXTURE_2D, tex)
 
     if (floatTexExt) {
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, SIM_RES, SIM_RES, 0, gl.RGBA, gl.FLOAT, data)
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, res, res, 0, gl.RGBA, gl.FLOAT, data)
     } else {
         const u8 = new Uint8Array(data.length)
         for (let i = 0; i < data.length; i++) {
             u8[i] = Math.floor(Math.max(0, Math.min(1, data[i])) * 255)
         }
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, SIM_RES, SIM_RES, 0, gl.RGBA, gl.UNSIGNED_BYTE, u8)
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, res, res, 0, gl.RGBA, gl.UNSIGNED_BYTE, u8)
     }
 
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
@@ -201,6 +251,9 @@ const sliders = new SliderManager({
     speed: { selector: '#speed', default: 0.5 },
     density: { selector: '#density', default: 1 },
     harmonics: { selector: '#harmonics', default: 1 },
+    feed: { selector: '#feed', default: 0.0367 },
+    kill: { selector: '#kill', default: 0.0649 },
+    metallic: { selector: '#metallic', default: 1.0 },
 })
 
 const mouse = new MouseTracker(canvas)
@@ -220,10 +273,13 @@ function switchEffect(name) {
     document.querySelectorAll('#sliders label').forEach(label => {
         const isNS = label.classList.contains('slider-navier-stokes')
         const isPW = label.classList.contains('slider-poolwater')
+        const isFF = label.classList.contains('slider-ferrofluid')
         if (name === 'navier-stokes') {
-            label.classList.toggle('hidden', isPW)
+            label.classList.toggle('hidden', isPW || isFF)
+        } else if (name === 'poolwater') {
+            label.classList.toggle('hidden', isNS || isFF)
         } else {
-            label.classList.toggle('hidden', isNS)
+            label.classList.toggle('hidden', isNS || isPW)
         }
     })
 
@@ -265,13 +321,24 @@ function resetSimulation(imagePixels) {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, SIM_RES, SIM_RES, 0, gl.RGBA, gl.FLOAT, td)
 }
 
+function resetFerro() {
+    ferroData = initFerroData()
+    ferroBuffer = 0
+    gl.bindTexture(gl.TEXTURE_2D, ferroTex0)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, FERRO_RES, FERRO_RES, 0, gl.RGBA, gl.FLOAT, ferroData)
+    gl.bindTexture(gl.TEXTURE_2D, ferroTex1)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, FERRO_RES, FERRO_RES, 0, gl.RGBA, gl.FLOAT, ferroData)
+}
+
 document.addEventListener('keydown', (e) => {
     if (e.key === ' ') {
         e.preventDefault()
-        resetSimulation()
+        if (currentEffect === 'ferrofluid') resetFerro()
+        else resetSimulation()
     }
     if (e.key === '1') switchEffect('navier-stokes')
     if (e.key === '2') switchEffect('poolwater')
+    if (e.key === '3') switchEffect('ferrofluid')
     if (e.key === 'r' || e.key === 'R') recorder.toggle()
 })
 
@@ -298,6 +365,8 @@ function render(time) {
 
     if (currentEffect === 'navier-stokes') {
         renderNavierStokes()
+    } else if (currentEffect === 'ferrofluid') {
+        renderFerrofluid(t)
     } else {
         renderPoolWater(t)
     }
@@ -384,6 +453,58 @@ function renderNavierStokes() {
     simBuffer = simRead
     transBuffer = transRead
     frameCount++
+}
+
+function renderFerrofluid(t) {
+    const ferroTextures = [ferroTex0, ferroTex1]
+    const ferroFramebuffers = [ferroFB0, ferroFB1]
+
+    let readIdx = ferroBuffer
+    let writeIdx = 1 - ferroBuffer
+
+    const mouseX = (mouse.x / canvas.width) * FERRO_RES
+    const mouseY = (mouse.y / canvas.height) * FERRO_RES
+
+    // Run multiple sim steps per frame for faster evolution
+    gl.viewport(0, 0, FERRO_RES, FERRO_RES)
+    gl.useProgram(ferroSimProgram)
+    bindQuad(ferroSimProgram)
+
+    gl.uniform2f(ferroSimUniforms.resolution, FERRO_RES, FERRO_RES)
+    gl.uniform2f(ferroSimUniforms.mouse, mouseX, mouseY)
+    gl.uniform1f(ferroSimUniforms.mouseDown, mouse.isDown ? 1.0 : 0.0)
+    gl.uniform1f(ferroSimUniforms.feed, sliders.get('feed'))
+    gl.uniform1f(ferroSimUniforms.kill, sliders.get('kill'))
+
+    for (let i = 0; i < 8; i++) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, ferroFramebuffers[writeIdx])
+        gl.activeTexture(gl.TEXTURE0)
+        gl.bindTexture(gl.TEXTURE_2D, ferroTextures[readIdx])
+        gl.uniform1i(ferroSimUniforms.state, 0)
+        gl.drawArrays(gl.TRIANGLES, 0, 6)
+
+        const tmp = readIdx
+        readIdx = writeIdx
+        writeIdx = tmp
+    }
+
+    // Display pass
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    gl.viewport(0, 0, canvas.width, canvas.height)
+
+    gl.useProgram(ferroDisplayProgram)
+    bindQuad(ferroDisplayProgram)
+
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, ferroTextures[readIdx])
+    gl.uniform1i(ferroDisplayUniforms.state, 0)
+    gl.uniform2f(ferroDisplayUniforms.resolution, canvas.width, canvas.height)
+    gl.uniform1f(ferroDisplayUniforms.time, t)
+    gl.uniform1f(ferroDisplayUniforms.metallic, sliders.get('metallic'))
+
+    gl.drawArrays(gl.TRIANGLES, 0, 6)
+
+    ferroBuffer = readIdx
 }
 
 function renderPoolWater(t) {
