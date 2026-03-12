@@ -33,28 +33,7 @@ nvm current
 npm -v
 ```
 
-### 1. Download the source code
-
-Option A – Git (recommended, though you will need to install `git`):
-
-```sh
-mkdir ~/_CODE ;
-cd ~/_CODE ;
-git clone https://github.com/douglasgoodwin/shader-playground.git ;
-cd shader-playground
-```
-
-Option B – ZIP download:
-
-1. Visit `https://github.com/douglasgoodwin/shader-playground` in a browser and download the ZIP.  
-2. Unzip it somewhere under your home directory (for example `~/_CODE/shader-playground`).  
-3. In Terminal:
-
-```sh
-cd ~/_CODE/shader-playground
-```
-
-Now `pwd` should end with `shader-playground`.
+NOTE: You probably already downloaded the software.
 
 ### 2. Install Node dependencies locally
 
